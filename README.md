@@ -46,6 +46,14 @@ gh workflow run fixture-demo.yml -f scenario=all
 4. 각 장면 job의 summary에서 패키지, 이전 버전, 새 버전, fixture 판정, 근거를 확인합니다.
 5. artifact `fixture-report-<장면>`의 `fixture-report.json`에서 `verdict`, `results[].status`, `depbee_executed: false`를 확인합니다.
 
+`known-match` job이 실패했다는 사실만으로는 기대한 실패가 아닙니다. 아래 세 가지가 모두 맞아야 기대한 실패입니다.
+
+- 게이트 단계가 종료 코드 1로 끝났습니다. 그 단계의 오류가 `Process completed with exit code 1.`입니다.
+- 제목이 `fixture 게이트 (depbee 제품 아님)`인 오류 주석이 `node_modules/DEPBEE-DEMO-SENTINEL` 줄을 가리키고, 내용에 `시연용 가상 목록과 일치(DEMO-FIXTURE-0001)`이 있습니다.
+- artifact `fixture-report-known-match`의 `fixture-report.json`에서 `verdict`가 `fail`이고 `results[0].status`가 `known_match`입니다.
+
+종료 코드가 2이거나, 제목이 `fixture 게이트 오류 (판정 아님)`인 주석이 있거나, 보고서가 올라오지 않았으면 게이트가 판정을 끝내지 못한 것입니다. 그 실패는 가상 목록 일치가 아닙니다.
+
 ### PR로 재현하기
 
 PR에서는 `fixture PR 검사 (depbee 제품 미실행)`이 실행됩니다. 장면 lockfile을 루트로 복사한 브랜치를 만들어 `main`으로 PR을 엽니다.
@@ -68,7 +76,13 @@ fixture 게이트는 대상 lockfile의 `packages` 항목 중 기준에 없거�
 2. 이름이나 버전을 해석하지 못하거나 사전 배포 버전이면 `hold`입니다. 경고 주석을 남기고 job은 성공합니다. 보류는 통과가 아닙니다.
 3. 그 밖의 항목은 `no_match`입니다.
 
-평가하지 못하면 종료 코드 2로 실패하며 통과로 처리하지 않습니다. lockfile이 없거나, 심볼릭 링크이거나, 8 MiB를 넘거나, JSON 객체가 아니거나, `packages`가 없거나(lockfileVersion 1), 변경 항목이 20개를 넘는 경우입니다. 가상 목록을 읽지 못한 경우도 같습니다.
+판정을 끝내지 못하면 종료 코드 2로 실패합니다. 통과로도 가상 목록 일치로도 처리하지 않습니다. 이때 오류 주석의 제목은 `fixture 게이트 오류 (판정 아님)`이고 보고서는 남지 않습니다. 원인은 세 가지입니다.
+
+- 입력을 읽지 못했습니다. lockfile이 없거나, 심볼릭 링크이거나, 8 MiB를 넘거나, JSON 객체가 아니거나, `packages`가 없거나(lockfileVersion 1), 변경 항목이 20개를 넘는 경우입니다. 가상 목록을 읽지 못한 경우도 같습니다.
+- 결과를 기록하지 못했습니다. 보고서나 summary 파일을 쓸 수 없는 경우입니다.
+- 게이트 내부에서 예상하지 못한 오류가 났습니다.
+
+게이트는 보고서와 summary를 쓴 뒤에만 판정 주석을 출력합니다. 그래서 일치 주석과 종료 코드 1은 기록까지 끝난 판정에서만 나옵니다.
 
 fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항목, 패키지 내용, 설치 스크립트, `package.json`을 보지 않습니다. 실제 저장소를 지키는 용도로 쓰지 않습니다.
 
@@ -82,13 +96,13 @@ fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항�
 
    | 저장소 변수 | 값 |
    |---|---|
-   | `DEPBEE_MODEL_VERSION` | 모델 Release 태그 |
+   | `DEPBEE_MODEL_VERSION` | 모델 Release 태그. 영문자나 숫자로 시작하고 영문자, 숫자, `.`, `_`, `-`만 쓰며 100자 이하 |
    | `DEPBEE_MODEL_SHA256` | `model.txt`의 SHA-256(소문자 16진수 64자) |
    | `DEPBEE_MANIFEST_SHA256` | 모델 `manifest.json`의 SHA-256 |
-   | `DEPBEE_KNOWN_MALICIOUS_VERSION` | 색인 Release 태그 |
+   | `DEPBEE_KNOWN_MALICIOUS_VERSION` | 색인 Release 태그. 형식은 모델 태그와 같음 |
    | `DEPBEE_KNOWN_MALICIOUS_SHA256` | `known-malicious-index.json`의 SHA-256 |
 
-4. **depbee scan (제품 연동)** workflow를 수동 실행해 `제품 연동 변수 확인 (검사 아님)` job이 성공하는지 봅니다. 이 job은 변수 다섯 개가 있고 형식이 맞는지만 확인합니다. 저장소 공개 여부와 Release 파일의 해시는 확인하지 않습니다.
+4. **depbee scan (제품 연동)** workflow를 수동 실행해 `제품 연동 변수 확인 (검사 아님)` job이 성공하는지 봅니다. 이 job은 변수 다섯 개의 형식만 확인합니다. 형식 규칙은 고정한 depbee Action의 입력 검사와 같습니다. 저장소 공개 여부와 Release 파일의 해시는 확인하지 않습니다.
 5. `.github/workflows/depbee.yml`에서 `pull_request` 두 줄의 주석을 풀어 PR로 올립니다.
 6. lockfile을 바꾸는 PR에서 `depbee scan (제품 실제 검사)` job이 실제로 실행됐는지 확인합니다.
 
@@ -103,10 +117,10 @@ fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항�
 
 | 위치 | 실패가 뜻하는 것 |
 |---|---|
-| fixture 시연의 `known-match` 장면 | 기대한 결과입니다. 가상 목록 일치를 실패로 처리했습니다. |
+| fixture 시연의 `known-match` 장면 | 종료 코드 1, 일치 주석, `verdict`가 `fail`인 보고서가 모두 있으면 기대한 결과입니다. 하나라도 없으면 게이트가 판정을 끝내지 못한 실패입니다. |
 | fixture 시연의 `pass`, `hold-warning` 장면 | 기대와 다릅니다. 게이트, 가상 목록, 장면 lockfile, 기준 lockfile 중 하나가 바뀌었습니다. |
 | fixture 시연의 자체 테스트 | 게이트나 workflow가 이 문서와 다르게 동작합니다. 시연 전에 고쳐야 합니다. |
-| fixture PR 검사 | PR의 lockfile에 가상 목록과 일치하는 항목이 있거나(종료 코드 1) lockfile을 평가하지 못했습니다(종료 코드 2). |
+| fixture PR 검사 | 종료 코드 1, 일치 주석, `verdict`가 `fail`인 보고서가 있으면 PR의 lockfile에 가상 목록과 일치하는 항목이 있습니다. 종료 코드 2이면 게이트가 판정을 끝내지 못했습니다. |
 | 제품 연동 변수 확인 | 제품 연동이 미구성입니다. depbee 검사는 실행되지 않았습니다. |
 | depbee scan (제품 실제 검사) | depbee가 기지 악성 일치를 찾았거나 검사를 끝내지 못했습니다. Action을 받지 못해 job 준비 단계에서 실패하면 제품 저장소가 공개됐는지 확인합니다. |
 

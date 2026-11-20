@@ -25,13 +25,17 @@ jobs:
           DEPBEE_MANIFEST_SHA256: ${{ vars.DEPBEE_MANIFEST_SHA256 }}
           DEPBEE_KNOWN_MALICIOUS_VERSION: ${{ vars.DEPBEE_KNOWN_MALICIOUS_VERSION }}
           DEPBEE_KNOWN_MALICIOUS_SHA256: ${{ vars.DEPBEE_KNOWN_MALICIOUS_SHA256 }}
+        # 형식은 고정한 depbee Action의 입력 검사와 같다. 여기서 통과한 값을 Action이 거부하지 않게 한다.
         run: |
+          LC_ALL=C
+          tag='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
+          digest='^[0-9a-f]{64}$'
           missing=()
           for name in DEPBEE_MODEL_VERSION DEPBEE_KNOWN_MALICIOUS_VERSION; do
-            [[ -n "${!name}" ]] || missing+=("$name")
+            [[ "${!name}" =~ $tag ]] || missing+=("$name")
           done
           for name in DEPBEE_MODEL_SHA256 DEPBEE_MANIFEST_SHA256 DEPBEE_KNOWN_MALICIOUS_SHA256; do
-            [[ "${!name}" =~ ^[0-9a-f]{64}$ ]] || missing+=("$name")
+            [[ "${!name}" =~ $digest ]] || missing+=("$name")
           done
           if (( ${#missing[@]} )); then
             echo "::error title=제품 연동 미구성::depbee 제품 검사는 실행되지 않았습니다. 비어 있거나 형식이 틀린 저장소 변수: ${missing[*]}"

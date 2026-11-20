@@ -6,14 +6,17 @@ versions. It downloads nothing, runs no package code and computes no ML score, s
 nothing about safety. Standard library only: workflows run this file with `python3 -I` from the
 trusted checkout, and the list and the default base lockfile come from that same checkout.
 
-Exit status: 0 no list match (holds only warn), 1 a list match, 2 nothing could be evaluated.
+Exit status: 0 no list match (holds only warn), 1 a list match whose report and summary were
+written, 2 nothing was decided or recorded (unreadable input, unwritable output, internal error).
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
 import sys
+import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +38,11 @@ VERDICTS = {
     "no_changes": "변경 없음",
 }
 TITLE = "fixture 게이트 (depbee 제품 아님)"
+ERROR_TITLE = "fixture 게이트 오류 (판정 아님)"
+UNDECIDED = (
+    "검사를 끝내지 못했습니다. 통과가 아닙니다. "
+    "이 실패는 가상 목록 일치 판정이 아닙니다."
+)
 NOTICE = (
     "fixture 시연입니다. depbee 제품은 실행되지 않았습니다. "
     "이 job의 성공이나 실패는 보안 판정이 아닙니다."
@@ -232,6 +240,46 @@ def write_summary(text: str) -> None:
         print(text)
 
 
+def record(report_path, verdict: str, rows: list, base: str, head: str) -> None:
+    """Write the report, then the summary. Raises GateError when either cannot be written."""
+    report = {
+        "tool": "depbee-actions-demo fixture gate",
+        "depbee_executed": False,
+        "verdict": verdict,
+        "base": clean(base),
+        "head": clean(head),
+        "results": rows,
+    }
+    # Both texts are built before the first write, so only a failing write can interrupt it.
+    report_text = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    summary_text = summary(verdict, rows, base, head)
+    try:
+        if report_path:
+            report_path.write_text(report_text, encoding="utf-8")
+        write_summary(summary_text)
+    except OSError as exc:
+        # The workflow uploads the report: none may remain for results that were not recorded.
+        if report_path:
+            with contextlib.suppress(OSError):
+                report_path.unlink()
+        where = f" 쓰지 못한 파일: {clean(exc.filename)}" if exc.filename else ""
+        raise GateError(
+            f"운영 오류: 결과를 기록하지 못했습니다({type(exc).__name__}).{where}"
+        ) from exc
+
+
+def fail(problem: str) -> int:
+    """Say that nothing was decided and return exit status 2."""
+    print(command("error", f"{UNDECIDED} {problem}", title=ERROR_TITLE))
+    # When the summary is what cannot be written, the annotation above already says so.
+    with contextlib.suppress(OSError):
+        write_summary(
+            f"## fixture 시연 결과: 검사하지 못함\n\n> {NOT_DEPBEE}\n\n"
+            f"{UNDECIDED} {markdown(problem)}\n"
+        )
+    return 2
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -255,34 +303,19 @@ def main(argv=None) -> int:
     shown = args.annotate_as or args.head.as_posix()
     base = args.base.relative_to(ROOT) if args.base.is_relative_to(ROOT) else args.base
     print(command("notice", NOTICE, title=TITLE))
+    # Record first, announce last: a run that cannot record its results must end as an error,
+    # never with a list match annotation and exit status 1.
     try:
         verdict, rows, annotations = run(args.base, args.head, shown)
+        record(args.report, verdict, rows, base.as_posix(), shown)
     except GateError as exc:
-        print(
-            command(
-                "error", f"검사하지 못했습니다. 통과가 아닙니다. {exc}", title=TITLE
-            )
-        )
-        write_summary(
-            f"## fixture 시연 결과: 검사하지 못함\n\n> {NOT_DEPBEE}\n\n"
-            f"검사하지 못했습니다. 통과가 아닙니다. {markdown(str(exc))}\n"
-        )
-        return 2
+        return fail(str(exc))
+    # Anything uncaught would end the process with status 1, which means a list match.
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return fail(f"운영 오류: 게이트 내부 오류입니다({type(exc).__name__}).")
     for annotation in annotations:
         print(annotation)
-    write_summary(summary(verdict, rows, base.as_posix(), shown))
-    if args.report:
-        report = {
-            "tool": "depbee-actions-demo fixture gate",
-            "depbee_executed": False,
-            "verdict": verdict,
-            "base": clean(base.as_posix()),
-            "head": clean(shown),
-            "results": rows,
-        }
-        args.report.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
     return 1 if verdict == "fail" else 0
 
 

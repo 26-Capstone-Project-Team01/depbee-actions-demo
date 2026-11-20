@@ -29,6 +29,7 @@ EXPECTED = {
     "hold-warning": (0, "warn", ["hold"], ("warning", 14)),
 }
 BASE = {"node_modules/ms": {"version": "2.1.1"}}
+KNOWN_MATCH = (SCENARIOS / "known-match" / "package-lock.json").read_text("utf-8")
 # RIGHT-TO-LEFT OVERRIDE, built here so that this source file holds no hidden character.
 BIDI = chr(0x202E)
 
@@ -43,8 +44,12 @@ def annotations(lines, level):
     return [line for line in lines if line.startswith(f"::{level}")]
 
 
-def gate(head, base=None, extra=()):
-    """Run main() on lockfile texts: (exit status, stdout lines, job summary, report or None)."""
+def gate(head, base=None, extra=(), blocked=()):
+    """Run main() on lockfile texts: (exit status, stdout lines, job summary, report or None).
+
+    Each output named in blocked ("summary", "report") has a folder at its path, so the gate
+    cannot write it.
+    """
     with tempfile.TemporaryDirectory() as temp:
         paths = {
             name: Path(temp, name) for name in ("base", "head", "summary", "report")
@@ -52,18 +57,22 @@ def gate(head, base=None, extra=()):
         paths["base"].write_text(lock(BASE) if base is None else base, encoding="utf-8")
         if head is not None:
             paths["head"].write_text(head, encoding="utf-8")
+        for name in blocked:
+            paths[name].mkdir()
         stdout = io.StringIO()
         argv = ["--base", str(paths["base"]), "--head", str(paths["head"])]
         argv += ["--report", str(paths["report"]), *extra]
         environ = {"GITHUB_STEP_SUMMARY": str(paths["summary"])}
         with mock.patch.dict(os.environ, environ), contextlib.redirect_stdout(stdout):
             status = fixture_gate.main(argv)
-        report = paths["report"]
+        summary, report = paths["summary"], paths["report"]
         return (
             status,
             stdout.getvalue().splitlines(),
-            paths["summary"].read_text(encoding="utf-8"),
-            json.loads(report.read_text(encoding="utf-8")) if report.exists() else None,
+            summary.read_text(encoding="utf-8") if summary.is_file() else "",
+            json.loads(report.read_text(encoding="utf-8"))
+            if report.is_file()
+            else None,
         )
 
 
@@ -124,17 +133,21 @@ class Scenes(unittest.TestCase):
         self.assertEqual(set(matrix), set(EXPECTED))
         self.assertEqual(folders, set(EXPECTED))
 
-    def test_pull_request_annotations_name_the_repository_path(self):
-        head = (SCENARIOS / "known-match" / "package-lock.json").read_text(
-            encoding="utf-8"
+    def test_expected_failure_is_a_match_annotation_and_a_fail_report(self):
+        """README: a red known-match job counts as expected only with these two."""
+        status, lines, _, report = gate(
+            KNOWN_MATCH, extra=["--annotate-as", "package-lock.json"]
         )
-        status, lines, _, _ = gate(head, extra=["--annotate-as", "package-lock.json"])
+        annotation = (
+            "::error file=package-lock.json,line=15,"
+            "title=fixture 게이트 (depbee 제품 아님)::"
+            "DEPBEE-DEMO-SENTINEL@9.9.9 (node_modules/DEPBEE-DEMO-SENTINEL): "
+            "시연용 가상 목록과 일치(DEMO-FIXTURE-0001)"
+        )
         self.assertEqual(status, 1)
-        self.assertTrue(
-            annotations(lines, "error")[0].startswith(
-                "::error file=package-lock.json,line=15,"
-            )
-        )
+        self.assertEqual(annotations(lines, "error"), [annotation])
+        self.assertEqual(report["verdict"], "fail")
+        self.assertEqual([row["status"] for row in report["results"]], ["known_match"])
 
     def test_known_list_names_cannot_be_published_or_downloaded(self):
         names = {
@@ -254,6 +267,7 @@ class UntrustedInput(unittest.TestCase):
                 status, lines, _, report = gate(lock(BASE))
         self.assertEqual(status, 2)
         self.assertEqual(len(annotations(lines, "error")), 1)
+        self.assertIn("가상 목록: ", annotations(lines, "error")[0])
         self.assertIsNone(report)
 
     def test_twenty_changes_are_evaluated(self):
@@ -273,6 +287,52 @@ class UntrustedInput(unittest.TestCase):
             with mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
                 os.environ.pop("GITHUB_STEP_SUMMARY", None)
                 self.assertEqual(fixture_gate.main(["--head", str(link)]), 2)
+
+
+class OperationalErrors(unittest.TestCase):
+    """Exit status 1 and the match annotation belong to a recorded list match, nothing else."""
+
+    def assert_error_without_a_verdict(self, status, lines, cause):
+        self.assertEqual(status, 2)
+        errors = annotations(lines, "error")
+        self.assertEqual(len(errors), 1, lines)
+        self.assertIn("title=fixture 게이트 오류 (판정 아님)::", errors[0])
+        self.assertIn("가상 목록 일치 판정이 아닙니다", errors[0])
+        self.assertIn(f"운영 오류: {cause}", errors[0])
+        self.assertNotIn("DEPBEE-DEMO-SENTINEL", "".join(lines))
+
+    def test_unwritable_report_is_not_a_list_match(self):
+        status, lines, summary, report = gate(KNOWN_MATCH, blocked=["report"])
+        self.assert_error_without_a_verdict(status, lines, "결과를 기록하지 못했습니다")
+        self.assertTrue(summary.startswith("## fixture 시연 결과: 검사하지 못함"))
+        self.assertIsNone(report)
+
+    def test_unwritable_summary_is_not_a_list_match(self):
+        status, lines, _, report = gate(KNOWN_MATCH, blocked=["summary"])
+        self.assert_error_without_a_verdict(status, lines, "결과를 기록하지 못했습니다")
+        # The workflow uploads the report: none may remain for results that were not recorded.
+        self.assertIsNone(report)
+
+    def test_unexpected_failure_is_not_a_list_match(self):
+        broken = mock.patch.object(
+            fixture_gate, "evaluate", side_effect=RuntimeError("unexpected")
+        )
+        with broken, contextlib.redirect_stderr(io.StringIO()) as stderr:
+            status, lines, summary, report = gate(KNOWN_MATCH)
+        self.assert_error_without_a_verdict(status, lines, "게이트 내부 오류입니다")
+        self.assertTrue(summary.startswith("## fixture 시연 결과: 검사하지 못함"))
+        self.assertIsNone(report)
+        self.assertIn("RuntimeError: unexpected", stderr.getvalue())
+
+    def test_unwritable_outputs_fail_a_passing_change_too(self):
+        passing = lock({"node_modules/ms": {"version": "2.1.3"}})
+        for name in ("report", "summary"):
+            with self.subTest(name):
+                status, lines, _, report = gate(passing, blocked=[name])
+                self.assert_error_without_a_verdict(
+                    status, lines, "결과를 기록하지 못했습니다"
+                )
+                self.assertIsNone(report)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,10 @@
 """Rules the workflows must keep: pinned actions, read-only tokens, no pull request code run."""
 
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +13,14 @@ PRODUCT = "depbee.yml"
 PRODUCT_ACTION = "26-Capstone-Project-Team01/depbee@"
 # README: this workflow may be deleted once the product check runs on pull requests.
 PULL_REQUEST_CHECK = "fixture-pr-check.yml"
+# Repository variables of the product check, here with values its input check accepts.
+VARIABLES = {
+    "DEPBEE_MODEL_VERSION": "model-v1.0",
+    "DEPBEE_MODEL_SHA256": "0" * 64,
+    "DEPBEE_MANIFEST_SHA256": "a" * 64,
+    "DEPBEE_KNOWN_MALICIOUS_VERSION": "known_2026.11",
+    "DEPBEE_KNOWN_MALICIOUS_SHA256": "f" * 64,
+}
 
 
 def code(text):
@@ -115,6 +127,20 @@ class WorkflowRules(unittest.TestCase):
             commands[0][:3], ["python3", "-I", "trusted/tools/fixture_gate.py"]
         )
 
+    def test_report_is_uploaded_even_when_the_gate_fails(self):
+        """README: an expected failure is confirmed with the uploaded report."""
+        upload = re.compile(
+            r"if: \$\{\{ !cancelled\(\) \}\}\n"
+            r" +uses: actions/upload-artifact@[0-9a-f]{40}\n"
+            r" +with:\n"
+            r" +name: fixture-report.*\n"
+            r" +path: \$\{\{ runner\.temp \}\}/fixture-report\.json\n"
+        )
+        for name, text in FIXTURE.items():
+            with self.subTest(name):
+                self.assertIn('--report "$RUNNER_TEMP/fixture-report.json"', text)
+                self.assertRegex(text, upload)
+
     def test_readme_names_the_product_commit_the_workflow_pins(self):
         pinned = re.search(
             re.escape(PRODUCT_ACTION) + r"[0-9a-f]{40}\n", WORKFLOWS[PRODUCT]
@@ -122,6 +148,61 @@ class WorkflowRules(unittest.TestCase):
         self.assertIsNotNone(pinned)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(pinned.group().strip(), readme)
+
+
+@unittest.skipUnless(
+    os.name == "posix" and shutil.which("bash"),
+    "runs the step with bash, like the runner",
+)
+class ProductReadiness(unittest.TestCase):
+    """The readiness step refuses what the pinned depbee Action refuses in its input check.
+
+    That check takes a Release tag that starts with a letter or digit and continues with up to 99
+    letters, digits, dots, underscores or hyphens, and a digest of 64 lowercase hex digits.
+    """
+
+    def check(self, **changed):
+        """(exit status, names the step reports) for the valid variables with these changes."""
+        workflow = (ROOT / ".github" / "workflows" / PRODUCT).read_text("utf-8")
+        (script,) = [found for found in scripts(workflow) if "missing=()" in found]
+        with tempfile.TemporaryDirectory() as temp:
+            step = Path(temp, "step.sh")
+            step.write_text(script, encoding="utf-8")
+            done = subprocess.run(
+                ["bash", "-e", str(step)],
+                env={"PATH": os.environ["PATH"], **VARIABLES, **changed},
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        output = done.stdout.decode("utf-8")
+        expected = (
+            "::error title=제품 연동 미구성::" if done.returncode else "::notice "
+        )
+        self.assertTrue(output.startswith(expected), output)
+        return done.returncode, sorted(re.findall(r"DEPBEE_[A-Z0-9_]+", output))
+
+    def test_well_formed_variables_are_accepted(self):
+        self.assertEqual(self.check(), (0, []))
+        self.assertEqual(self.check(DEPBEE_MODEL_VERSION="1" + "-" * 99), (0, []))
+
+    def test_nothing_registered_names_all_five(self):
+        self.assertEqual(
+            self.check(**dict.fromkeys(VARIABLES, "")), (1, sorted(VARIABLES))
+        )
+
+    def test_tags_the_action_refuses_are_refused(self):
+        refused = ("", "demo release", "-v1", ".v1", "release/v1", "v1 ", "v" * 101)
+        for name in ("DEPBEE_MODEL_VERSION", "DEPBEE_KNOWN_MALICIOUS_VERSION"):
+            for tag in (*refused, "버전1"):
+                with self.subTest(name=name, tag=tag):
+                    self.assertEqual(self.check(**{name: tag}), (1, [name]))
+
+    def test_digests_the_action_refuses_are_refused(self):
+        for name in (key for key in VARIABLES if key.endswith("SHA256")):
+            for digest in ("", "0" * 63, "0" * 65, "A" * 64, "g" * 64):
+                with self.subTest(name=name, digest=digest):
+                    self.assertEqual(self.check(**{name: digest}), (1, [name]))
 
 
 if __name__ == "__main__":
