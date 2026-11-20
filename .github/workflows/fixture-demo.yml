@@ -45,14 +45,17 @@ jobs:
         with:
           persist-credentials: false
       - name: fixture 게이트 실행 (depbee 제품 아님)
+        id: gate
         env:
           SCENARIO: ${{ matrix.scenario }}
         run: >-
           python3 -I tools/fixture_gate.py
           --head "fixtures/scenarios/$SCENARIO/package-lock.json"
           --report "$RUNNER_TEMP/fixture-report.json"
+      # 게이트가 판정을 기록하고 알리기까지 끝냈다는 신호가 있을 때만 올린다.
+      # 가상 목록 일치로 게이트 단계가 실패한 실행은 신호가 있으므로 올리고, 운영 오류로 끝난 실행은 올리지 않는다.
       - name: fixture 보고서 올리기
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.gate.outputs.report_ready == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fixture-report-${{ matrix.scenario }}

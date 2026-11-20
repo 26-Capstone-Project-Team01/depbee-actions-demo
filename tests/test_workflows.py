@@ -127,10 +127,14 @@ class WorkflowRules(unittest.TestCase):
             commands[0][:3], ["python3", "-I", "trusted/tools/fixture_gate.py"]
         )
 
-    def test_report_is_uploaded_even_when_the_gate_fails(self):
-        """README: an expected failure is confirmed with the uploaded report."""
+    def test_report_is_uploaded_only_on_the_ready_signal_of_the_gate(self):
+        """A gate step that failed on a list match still uploads; one that errored never does.
+
+        The gate writes `report_ready=true` as its last act (tests/test_fixture_gate.py), so a
+        report left behind by a failed cleanup is not uploaded either.
+        """
         upload = re.compile(
-            r"if: \$\{\{ !cancelled\(\) \}\}\n"
+            r"if: \$\{\{ !cancelled\(\) && steps\.gate\.outputs\.report_ready == 'true' \}\}\n"
             r" +uses: actions/upload-artifact@[0-9a-f]{40}\n"
             r" +with:\n"
             r" +name: fixture-report.*\n"
@@ -138,8 +142,12 @@ class WorkflowRules(unittest.TestCase):
         )
         for name, text in FIXTURE.items():
             with self.subTest(name):
-                self.assertIn('--report "$RUNNER_TEMP/fixture-report.json"', text)
+                # The step with this id is the gate, and it writes the path that is uploaded.
+                (step,) = re.findall(r" +id: gate\n((?: {8,}.*\n)+)", text)
+                self.assertIn("tools/fixture_gate.py", step)
+                self.assertIn('--report "$RUNNER_TEMP/fixture-report.json"', step)
                 self.assertRegex(text, upload)
+                self.assertEqual(text.count("uses: actions/upload-artifact@"), 1)
 
     def test_readme_names_the_product_commit_the_workflow_pins(self):
         pinned = re.search(

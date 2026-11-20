@@ -8,6 +8,8 @@ trusted checkout, and the list and the default base lockfile come from that same
 
 Exit status: 0 no list match (holds only warn), 1 a list match whose report and summary were
 written, 2 nothing was decided or recorded (unreadable input, unwritable output, internal error).
+With 0 and 1 the gate writes `report_ready=true` to GITHUB_OUTPUT as its last act; the workflows
+upload the report only then.
 """
 
 import argparse
@@ -240,6 +242,12 @@ def write_summary(text: str) -> None:
         print(text)
 
 
+def unwritable(what: str, exc: OSError) -> GateError:
+    """The error for an output that could not be written."""
+    where = f" 쓰지 못한 파일: {clean(exc.filename)}" if exc.filename else ""
+    return GateError(f"운영 오류: {what}({type(exc).__name__}).{where}")
+
+
 def record(report_path, verdict: str, rows: list, base: str, head: str) -> None:
     """Write the report, then the summary. Raises GateError when either cannot be written."""
     report = {
@@ -258,25 +266,46 @@ def record(report_path, verdict: str, rows: list, base: str, head: str) -> None:
             report_path.write_text(report_text, encoding="utf-8")
         write_summary(summary_text)
     except OSError as exc:
-        # The workflow uploads the report: none may remain for results that were not recorded.
-        if report_path:
-            with contextlib.suppress(OSError):
-                report_path.unlink()
-        where = f" 쓰지 못한 파일: {clean(exc.filename)}" if exc.filename else ""
-        raise GateError(
-            f"운영 오류: 결과를 기록하지 못했습니다({type(exc).__name__}).{where}"
-        ) from exc
+        raise unwritable("결과를 기록하지 못했습니다", exc) from exc
 
 
-def fail(problem: str) -> int:
-    """Say that nothing was decided and return exit status 2."""
-    print(command("error", f"{UNDECIDED} {problem}", title=ERROR_TITLE))
-    # When the summary is what cannot be written, the annotation above already says so.
-    with contextlib.suppress(OSError):
+def announce(annotations: list, report_path) -> None:
+    """Print the verdict annotations, then signal the workflow that the report is ready.
+
+    The workflows upload the report only on `report_ready`. Its file is opened before anything
+    is printed and written after the annotations are out: no verdict annotation without a
+    writable signal, no signal without the annotations. Raises GateError on either failure.
+    """
+    target = os.environ.get("GITHUB_OUTPUT") if report_path else None
+    try:
+        with (
+            open(target, "a", encoding="utf-8") if target else contextlib.nullcontext()
+        ) as ready:
+            for annotation in annotations:
+                print(annotation)
+            sys.stdout.flush()
+            if ready:
+                ready.write("report_ready=true\n")
+    except OSError as exc:
+        raise unwritable("판정을 알리지 못했습니다", exc) from exc
+
+
+def fail(problem: str, report_path) -> int:
+    """Say that nothing was decided, leave no report behind and return exit status 2.
+
+    Every step is best effort and none may raise: an exception here would end the process with
+    status 1. The workflows do not rely on the removal, they upload only on `report_ready`.
+    """
+    with contextlib.suppress(Exception):
+        print(command("error", f"{UNDECIDED} {problem}", title=ERROR_TITLE), flush=True)
+    with contextlib.suppress(Exception):
         write_summary(
             f"## fixture 시연 결과: 검사하지 못함\n\n> {NOT_DEPBEE}\n\n"
             f"{UNDECIDED} {markdown(problem)}\n"
         )
+    with contextlib.suppress(Exception):
+        if report_path:
+            report_path.unlink()
     return 2
 
 
@@ -298,24 +327,25 @@ def main(argv=None) -> int:
         "--report", type=Path, help="write the JSON report to this file"
     )
     args = parser.parse_args(argv)
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     shown = args.annotate_as or args.head.as_posix()
     base = args.base.relative_to(ROOT) if args.base.is_relative_to(ROOT) else args.base
-    print(command("notice", NOTICE, title=TITLE))
-    # Record first, announce last: a run that cannot record its results must end as an error,
-    # never with a list match annotation and exit status 1.
+    # Record, announce, then signal: a run that fails anywhere on the way must end as an error,
+    # never with a list match annotation, exit status 1 or a report marked ready for upload.
     try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        print(command("notice", NOTICE, title=TITLE))
         verdict, rows, annotations = run(args.base, args.head, shown)
         record(args.report, verdict, rows, base.as_posix(), shown)
+        announce(annotations, args.report)
     except GateError as exc:
-        return fail(str(exc))
+        return fail(str(exc), args.report)
     # Anything uncaught would end the process with status 1, which means a list match.
     except Exception as exc:  # noqa: BLE001
-        traceback.print_exc()
-        return fail(f"운영 오류: 게이트 내부 오류입니다({type(exc).__name__}).")
-    for annotation in annotations:
-        print(annotation)
+        with contextlib.suppress(Exception):
+            traceback.print_exc()
+        problem = f"운영 오류: 게이트 내부 오류입니다({type(exc).__name__})."
+        return fail(problem, args.report)
     return 1 if verdict == "fail" else 0
 
 
