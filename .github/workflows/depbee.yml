@@ -1,22 +1,55 @@
-name: depbee
+name: depbee scan (제품 연동)
 
+# depbee 제품의 실제 검사 경로다. fixture 시연(fixture-demo.yml, fixture-pr-check.yml)과 별개다.
+# 제품 저장소와 모델·색인 Release가 공개되기 전에는 PR 검사를 실행할 수 없어 pull_request 트리거를 꺼 두었다.
+# 켜는 절차는 README의 "제품 연동 켜기"에 있다. 준비가 끝나면 아래 두 줄의 주석을 푼다.
 on:
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
+  # pull_request:
+  #   branches: [main]
 
 permissions:
   contents: read
 
 jobs:
+  readiness:
+    name: 제품 연동 변수 확인 (검사 아님)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 저장소 변수 다섯 개 확인
+        env:
+          DEPBEE_MODEL_VERSION: ${{ vars.DEPBEE_MODEL_VERSION }}
+          DEPBEE_MODEL_SHA256: ${{ vars.DEPBEE_MODEL_SHA256 }}
+          DEPBEE_MANIFEST_SHA256: ${{ vars.DEPBEE_MANIFEST_SHA256 }}
+          DEPBEE_KNOWN_MALICIOUS_VERSION: ${{ vars.DEPBEE_KNOWN_MALICIOUS_VERSION }}
+          DEPBEE_KNOWN_MALICIOUS_SHA256: ${{ vars.DEPBEE_KNOWN_MALICIOUS_SHA256 }}
+        run: |
+          missing=()
+          for name in DEPBEE_MODEL_VERSION DEPBEE_KNOWN_MALICIOUS_VERSION; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          for name in DEPBEE_MODEL_SHA256 DEPBEE_MANIFEST_SHA256 DEPBEE_KNOWN_MALICIOUS_SHA256; do
+            [[ "${!name}" =~ ^[0-9a-f]{64}$ ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error title=제품 연동 미구성::depbee 제품 검사는 실행되지 않았습니다. 비어 있거나 형식이 틀린 저장소 변수: ${missing[*]}"
+            exit 1
+          fi
+          echo "::notice title=제품 연동 변수 확인::저장소 변수 다섯 개의 형식이 맞습니다. 이 확인은 검사가 아닙니다. 실제 검사는 pull_request 트리거를 켠 뒤 PR에서 scan job이 실행합니다."
+
   scan:
+    name: depbee scan (제품 실제 검사)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: 26-Capstone-Project-Team01/depbee@3d2b1866b991368fecf2f16bd3d65df4b7dff7cb
+      - uses: 26-Capstone-Project-Team01/depbee@612949a06652bcc04e9754480c39b1bb38af3b30
         with:
           max-changes: '1'
           model-version: ${{ vars.DEPBEE_MODEL_VERSION }}

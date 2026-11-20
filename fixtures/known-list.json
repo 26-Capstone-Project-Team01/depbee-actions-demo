@@ -1,0 +1,10 @@
+{
+  "description": "depbee Actions fixture 시연 전용 가상 목록입니다. 실제 악성 패키지 기록이 아니며 depbee의 기지 악성 색인과 무관합니다.",
+  "entries": [
+    {
+      "id": "DEMO-FIXTURE-0001",
+      "name": "DEPBEE-DEMO-SENTINEL",
+      "versions": ["9.9.9"]
+    }
+  ]
+}

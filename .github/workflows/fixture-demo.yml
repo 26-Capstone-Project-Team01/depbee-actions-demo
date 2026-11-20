@@ -1,0 +1,60 @@
+name: fixture 시연 (depbee 제품 미실행)
+
+# 수동 실행 전용이다. 저장소의 fixture lockfile을 fixture 게이트로 평가해 세 장면을 재현한다.
+# depbee 제품, 모델, 실제 기지 악성 색인은 쓰지 않는다. 제품 연동은 depbee.yml에 따로 있다.
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 재현할 장면입니다. all은 세 장면을 각각 별도 job으로 실행합니다.
+        type: choice
+        default: all
+        options:
+          - all
+          - pass
+          - known-match
+          - hold-warning
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    name: 자체 테스트 (세 장면 기대 결과 검증)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 게이트와 workflow 규칙 테스트
+        run: python3 -m unittest discover -s tests -v
+
+  scene:
+    name: 장면 ${{ matrix.scenario }} (fixture 판정, 보안 게이트 아님)
+    needs: self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      # known-match 장면의 기대 결과가 실패이므로 한 장면의 실패가 다른 장면을 취소하지 않게 한다.
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(inputs.scenario == 'all' && '["pass","known-match","hold-warning"]' || format('["{0}"]', inputs.scenario)) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: fixture 게이트 실행 (depbee 제품 아님)
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: >-
+          python3 -I tools/fixture_gate.py
+          --head "fixtures/scenarios/$SCENARIO/package-lock.json"
+          --report "$RUNNER_TEMP/fixture-report.json"
+      - name: fixture 보고서 올리기
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fixture-report-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/fixture-report.json
+          retention-days: 7

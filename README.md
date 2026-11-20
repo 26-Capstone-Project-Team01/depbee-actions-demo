@@ -1,32 +1,150 @@
 # depbee Actions 시연
 
-npm 의존성 변경 PR을 열면 depbee가 변경된 lockfile 항목을 검사합니다. 기본 브랜치에는 `ms@2.1.1` 하나가 있습니다. 아래 세 브랜치는 각각 `main`에서 독립적으로 갈라지며 패키지 이름·버전·배포 메타데이터만 변경합니다. 패키지 설치 없이 시연할 수 있습니다.
+npm 의존성 변경을 GitHub Actions에서 검사하는 흐름을 보여 주는 소비자 저장소입니다. 기준 프로젝트는 `ms@2.1.1` 하나를 쓰는 `package.json`과 `package-lock.json`입니다. 어떤 workflow도 패키지를 설치하거나 실행하지 않습니다.
 
-| PR 브랜치 | 변경 | 기대 결과 |
+## 지금 실행되는 것과 실행되지 않는 것
+
+depbee 제품 저장소와 모델·기지 악성 색인 Release는 아직 공개되지 않았습니다. 그래서 이 저장소에는 서로 섞이지 않는 두 경로가 있습니다. fixture는 시연을 위해 저장소에 넣어 둔 고정 입력을 뜻합니다.
+
+| 구분 | fixture 시연 | 제품 검사 |
 |---|---|---|
-| `demo/pass` | ms를 2.1.3으로 업데이트 | D04-E00 기준 정상 분석 완료, Check 성공 |
-| `demo/known-fail` | 기지 악성으로 기록된 버전을 하나 추가 | 색인의 이름·버전 일치, Check 실패와 오류 주석 |
-| `demo/hold-warning` | ms를 3.0.0-canary.1로 변경 | 사전 배포 버전으로 분석 보류, Check 성공과 경고 주석 |
+| workflow 파일 | `fixture-demo.yml`, `fixture-pr-check.yml` | `depbee.yml` |
+| 실행하는 코드 | 이 저장소의 `tools/fixture_gate.py` | depbee Action |
+| 판정 근거 | lockfile의 이름과 버전, 가상 목록 `fixtures/known-list.json` | 기지 악성 색인, ML 위험 점수 |
+| 지금 상태 | 실행됩니다. | PR 검사는 꺼져 있습니다. 수동 실행은 변수만 확인하고 미구성이면 실패합니다. |
+| 결과의 의미 | 화면과 흐름의 시연입니다. 보안 판정이 아닙니다. | depbee의 실제 판정입니다. |
 
-기지 악성 장면은 lockfile의 `integrity`를 의도적으로 생략합니다. depbee는 이 항목의 tarball 추출을 건너뛰고 이름·버전만 색인과 대조합니다. 이 PR은 검사 화면에서만 사용합니다. 정상·보류 장면에는 버전에 해당하는 integrity가 있습니다.
+fixture 시연의 성공은 depbee가 검사해서 통과했다는 뜻이 아닙니다. fixture 시연의 workflow 이름에는 `depbee 제품 미실행`이, 게이트를 실행하는 job 이름에는 `보안 게이트 아님`이 붙어 있습니다. 실행할 때마다 같은 내용의 notice 주석과 job summary 첫 문단이 나옵니다.
 
-## 실제 PR을 열기 전에
+## fixture 시연의 세 장면
 
-1. depbee와 분석기 저장소 `26-Capstone-Project-Team01/depbee-analyzer`가 익명으로 접근 가능해야 합니다. 워크플로의 depbee 고정 SHA는 준비 시점의 `3d2b186`입니다. 공개 시연 전 분석기 설치 URL과 Action의 고정 커밋 추출 코드가 새 저장소 이름을 지원하는지 확인하고, 검증된 depbee 커밋의 40자 SHA를 `uses`에 고정합니다. `main`을 갱신하면 세 PR 브랜치도 같은 워크플로 커밋을 기준으로 맞춥니다.
-2. 공개된 depbee Release의 모델·색인 파일을 익명으로 받아 SHA-256을 대조하고 아래 값을 데모 저장소의 **Settings > Secrets and variables > Actions > Variables**에 등록합니다. 모델 파일은 `model.txt`, `manifest.json`입니다. 색인 파일은 `known-malicious-index.json`, `known-malicious-manifest.json`입니다. 색인에 기지 악성 장면의 이름·버전이 들어 있는지도 확인합니다.
+| 장면 | 기준 lockfile에서 바뀌는 것 | job 결과 | 주석 |
+|---|---|---|---|
+| `pass` | `ms`를 2.1.1에서 2.1.3으로 올립니다. | 성공 | 없음 |
+| `known-match` | 가상 패키지 `DEPBEE-DEMO-SENTINEL@9.9.9`를 추가합니다. | 실패 | 오류 1개 |
+| `hold-warning` | `ms`를 사전 배포 버전 3.0.0-canary.1로 바꿉니다. | 성공 | 경고 1개 |
 
-| 저장소 변수 | 값 |
+장면의 대상 lockfile은 `fixtures/scenarios/<장면>/package-lock.json`입니다. 결과는 미리 적어 둔 값이 아닙니다. fixture 게이트가 실행될 때마다 기준 lockfile과 대상 lockfile을 비교해 계산합니다.
+
+`DEPBEE-DEMO-SENTINEL`은 이 시연을 위해 지은 가상의 이름이며 실제 악성 패키지 기록이 아닙니다. npm은 새 패키지 이름에 대문자를 허용하지 않으므로 이 이름으로는 패키지를 새로 올릴 수 없습니다. 장면 lockfile의 이 항목에는 내려받을 주소도 없습니다.
+
+### 장면 실행하기
+
+Actions 탭에서 **fixture 시연 (depbee 제품 미실행)**을 고르고 **Run workflow**에서 `scenario`를 선택합니다. GitHub CLI로는 아래처럼 실행합니다.
+
+```sh
+gh workflow run fixture-demo.yml -f scenario=all
+```
+
+`scenario`는 `all`, `pass`, `known-match`, `hold-warning` 중 하나입니다. `all`은 자체 테스트 job 하나와 장면 job 세 개를 실행합니다. `known-match` 장면의 기대 결과가 실패이므로 `all`과 `known-match` 실행은 전체가 실패로 끝납니다. 이것이 정상입니다.
+
+### 실행 결과에서 확인할 것
+
+1. job 목록에서 `자체 테스트 (세 장면 기대 결과 검증)`이 성공인지 확인합니다. 이 job은 `tests/`를 실행해 세 장면의 결과와 workflow 규칙이 이 문서와 같은지 검사합니다. 실패하면 장면 job은 실행되지 않습니다.
+2. 장면 job의 성공과 실패가 위 표와 같은지 확인합니다.
+3. 실행 요약의 Annotations에서 `known-match`의 오류와 `hold-warning`의 경고를 확인합니다. 주석은 대상 lockfile에서 그 패키지의 `packages` 키가 있는 줄을 가리킵니다. 실패한 job에는 GitHub가 붙이는 `Process completed with exit code 1.` 오류도 함께 나옵니다.
+4. 각 장면 job의 summary에서 패키지, 이전 버전, 새 버전, fixture 판정, 근거를 확인합니다.
+5. artifact `fixture-report-<장면>`의 `fixture-report.json`에서 `verdict`, `results[].status`, `depbee_executed: false`를 확인합니다.
+
+### PR로 재현하기
+
+PR에서는 `fixture PR 검사 (depbee 제품 미실행)`이 실행됩니다. 장면 lockfile을 루트로 복사한 브랜치를 만들어 `main`으로 PR을 엽니다.
+
+```sh
+git switch -c scene/known-match main
+cp fixtures/scenarios/known-match/package-lock.json package-lock.json
+git commit -am "known-match 장면을 재현한다"
+git push -u origin scene/known-match
+gh pr create --base main --title "known-match 장면" --body "fixture 시연용 PR입니다. 병합하지 않습니다."
+```
+
+결과는 수동 실행과 같고, 주석은 `package-lock.json`의 해당 줄을 가리킵니다. fixture 게이트는 lockfile만 읽으므로 `package.json`은 바꾸지 않아도 됩니다. 장면 PR은 병합하지 않고 닫습니다. 병합하면 `main`의 기준 lockfile이 바뀌어 세 장면의 결과가 달라집니다.
+
+### fixture 게이트의 규칙과 한계
+
+fixture 게이트는 대상 lockfile의 `packages` 항목 중 기준에 없거나 이름 또는 버전이 달라진 항목을 차례로 판정합니다.
+
+1. 이름과 버전이 가상 목록에 있으면 `known_match`입니다. 오류 주석을 남기고 종료 코드 1로 job을 실패시킵니다.
+2. 이름이나 버전을 해석하지 못하거나 사전 배포 버전이면 `hold`입니다. 경고 주석을 남기고 job은 성공합니다. 보류는 통과가 아닙니다.
+3. 그 밖의 항목은 `no_match`입니다.
+
+평가하지 못하면 종료 코드 2로 실패하며 통과로 처리하지 않습니다. lockfile이 없거나, 심볼릭 링크이거나, 8 MiB를 넘거나, JSON 객체가 아니거나, `packages`가 없거나(lockfileVersion 1), 변경 항목이 20개를 넘는 경우입니다. 가상 목록을 읽지 못한 경우도 같습니다.
+
+fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항목, 패키지 내용, 설치 스크립트, `package.json`을 보지 않습니다. 실제 저장소를 지키는 용도로 쓰지 않습니다.
+
+## 제품 연동 켜기
+
+`depbee.yml`의 `scan` job은 `26-Capstone-Project-Team01/depbee@612949a06652bcc04e9754480c39b1bb38af3b30` Action을 호출합니다. 제품 저장소와 Release가 공개되기 전에는 이 job을 실행할 수 없어 `pull_request` 트리거를 주석으로 꺼 두었습니다. 공개된 뒤 아래 순서로 켭니다.
+
+1. depbee 저장소와, depbee가 설치 단계에서 받는 depbee-analyzer 저장소가 공개됐는지 확인합니다.
+2. depbee Release에 모델 파일 `model.txt`, `manifest.json`과 색인 파일 `known-malicious-index.json`, `known-malicious-manifest.json`이 올라와 있는지 확인합니다.
+3. **Settings > Secrets and variables > Actions > Variables**에 아래 저장소 변수 다섯 개를 등록합니다.
+
+   | 저장소 변수 | 값 |
+   |---|---|
+   | `DEPBEE_MODEL_VERSION` | 모델 Release 태그 |
+   | `DEPBEE_MODEL_SHA256` | `model.txt`의 SHA-256(소문자 16진수 64자) |
+   | `DEPBEE_MANIFEST_SHA256` | 모델 `manifest.json`의 SHA-256 |
+   | `DEPBEE_KNOWN_MALICIOUS_VERSION` | 색인 Release 태그 |
+   | `DEPBEE_KNOWN_MALICIOUS_SHA256` | `known-malicious-index.json`의 SHA-256 |
+
+4. **depbee scan (제품 연동)** workflow를 수동 실행해 `제품 연동 변수 확인 (검사 아님)` job이 성공하는지 봅니다. 이 job은 변수 다섯 개가 있고 형식이 맞는지만 확인합니다. 저장소 공개 여부와 Release 파일의 해시는 확인하지 않습니다.
+5. `.github/workflows/depbee.yml`에서 `pull_request` 두 줄의 주석을 풀어 PR로 올립니다.
+6. lockfile을 바꾸는 PR에서 `depbee scan (제품 실제 검사)` job이 실제로 실행됐는지 확인합니다.
+
+제품 검사가 켜지면 같은 PR에 fixture PR 검사와 제품 검사가 함께 나옵니다. 판정이 둘로 보이지 않게 하려면 `fixture-pr-check.yml`을 지웁니다. 이 파일은 지워도 테스트가 통과합니다.
+
+제품 검사의 판정은 depbee 문서를 따릅니다. 기지 악성 일치는 실패입니다. ML 위험 점수 기준 이상과 보류는 경고입니다. 입력 오류, 모델·색인 해시 불일치, 설치 실패는 실패입니다. 장면마다 lockfile 항목 하나만 바뀌므로 `max-changes`를 1로 두었습니다. 항목을 둘 이상 바꾼 PR은 검사 없이 실패합니다.
+
+- fork나 Dependabot이 연 PR의 실행에 저장소 변수가 빈 값으로 전달되면 Action의 입력 검사가 실패합니다. 검사 없이 통과하지 않습니다. 이때는 다섯 값을 workflow 파일에 직접 적습니다.
+- `known-match` 장면은 제품 검사에서 재현되지 않습니다. `DEPBEE-DEMO-SENTINEL`은 실제 색인에 없기 때문입니다. `pass`와 `hold-warning` 장면의 lockfile은 실제 `ms` 버전과 registry의 `integrity` 값을 담고 있어 제품 검사에도 쓸 수 있습니다.
+
+## 실패의 의미
+
+| 위치 | 실패가 뜻하는 것 |
 |---|---|
-| `DEPBEE_MODEL_VERSION` | 모델 Release 태그 |
-| `DEPBEE_MODEL_SHA256` | model.txt의 소문자 64자리 SHA-256 |
-| `DEPBEE_MANIFEST_SHA256` | 모델 manifest.json의 소문자 64자리 SHA-256 |
-| `DEPBEE_KNOWN_MALICIOUS_VERSION` | 색인 Release 태그 |
-| `DEPBEE_KNOWN_MALICIOUS_SHA256` | known-malicious-index.json의 소문자 64자리 SHA-256 |
+| fixture 시연의 `known-match` 장면 | 기대한 결과입니다. 가상 목록 일치를 실패로 처리했습니다. |
+| fixture 시연의 `pass`, `hold-warning` 장면 | 기대와 다릅니다. 게이트, 가상 목록, 장면 lockfile, 기준 lockfile 중 하나가 바뀌었습니다. |
+| fixture 시연의 자체 테스트 | 게이트나 workflow가 이 문서와 다르게 동작합니다. 시연 전에 고쳐야 합니다. |
+| fixture PR 검사 | PR의 lockfile에 가상 목록과 일치하는 항목이 있거나(종료 코드 1) lockfile을 평가하지 못했습니다(종료 코드 2). |
+| 제품 연동 변수 확인 | 제품 연동이 미구성입니다. depbee 검사는 실행되지 않았습니다. |
+| depbee scan (제품 실제 검사) | depbee가 기지 악성 일치를 찾았거나 검사를 끝내지 못했습니다. Action을 받지 못해 job 준비 단계에서 실패하면 제품 저장소가 공개됐는지 확인합니다. |
 
-준비 시점에는 공개 Release가 없습니다. 필수 변수가 비거나 파일 다운로드·해시 검증에 실패하면 Check도 실패합니다. 이 경우 탐지 결과가 나오기 전이므로 기지 악성 장면의 성공 조건에 포함하지 않습니다.
+실패한 검사가 병합을 실제로 막는지는 저장소의 필수 검사 설정이 정합니다.
 
-## 시연
+## 신뢰 경계
 
-공개 범위를 확인한 뒤 각 브랜치를 별도 PR로 열고 기준 브랜치는 모두 `main`으로 둡니다. 기지 악성 이름과 버전도 공개 PR 이력에 남으므로 해당 장면은 공개 동의 후에 올립니다. Job summary와 `depbee-report` artifact에서 변경 한 건의 판정을 확인합니다. 기지 악성 장면은 `known_malicious.status=hit`, 보류 장면은 `status=incomplete`와 경고, 정상 장면은 `status=not_flagged`까지 확인합니다. 보류도 기본 Check는 초록색입니다. 시연 후 PR을 닫아 기준 프로젝트를 유지합니다.
+- 모든 workflow의 권한은 `contents: read`입니다. secret을 쓰지 않고 checkout 뒤 토큰을 남기지 않습니다(`persist-credentials: false`).
+- 모든 Action은 40자 커밋 SHA로 고정했습니다.
+- PR 검사는 `pull_request` 이벤트에서만 실행합니다. `pull_request_target`과 `workflow_run`은 쓰지 않습니다.
+- fixture PR 검사가 실행하는 코드는 기준 브랜치에서 받은 `tools/fixture_gate.py`뿐이고 `python3 -I`로 실행합니다. PR에서는 `package-lock.json` 한 파일만 받아 데이터로 읽습니다. 게이트나 가상 목록을 고친 PR도 병합 전에는 기준 브랜치의 코드와 목록으로 평가됩니다.
+- `pull_request` 이벤트는 PR에 든 workflow 파일을 실행합니다. workflow를 고친 PR은 검사 자체를 바꿀 수 있으므로 `.github/workflows/` 변경은 CODEOWNERS와 브랜치 보호로 리뷰를 거치게 합니다.
+- lockfile에서 온 문자열은 신뢰하지 않습니다. 주석, summary, 보고서에 쓰기 전에 인쇄 가능한 ASCII가 아닌 문자를 `\uXXXX`로 바꾸고 120자로 자른 뒤 workflow 명령과 Markdown 규칙으로 이스케이프합니다.
+- artifact는 fixture 게이트가 runner 임시 폴더에 쓴 JSON 파일 하나이며 7일 뒤 지워집니다. 이 저장소의 workflow는 artifact를 내려받아 쓰지 않습니다.
+- 장면 lockfile은 시연 입력입니다. 이 파일들로 `npm install`이나 `npm ci`를 실행하지 않습니다.
 
-로컬에서는 `git diff main...demo/pass -- package.json package-lock.json`으로 변경을 확인할 수 있습니다. 끝의 브랜치 이름을 바꾸면 다른 장면도 같은 방식으로 볼 수 있습니다. CI는 신뢰한 Action만 호출합니다. 소비자 프로젝트의 npm, 설치 스크립트, PR에 들어 있는 코드는 실행할 필요가 없습니다.
+위 규칙 가운데 텍스트로 확인할 수 있는 것은 `tests/test_workflows.py`가 검사합니다.
+
+## 로컬에서 확인하기
+
+Python 3.12 이상이 필요하고 표준 라이브러리만 씁니다. 저장소 루트에서 실행합니다.
+
+```sh
+python tools/fixture_gate.py --head fixtures/scenarios/known-match/package-lock.json
+python -m unittest discover -s tests -v
+```
+
+첫 명령은 주석 줄과 summary를 터미널에 출력하고 종료 코드 1로 끝납니다. 게이트, 가상 목록, 장면 lockfile, workflow를 바꾼 뒤에는 테스트를 실행하고, 올린 브랜치에서 `gh workflow run fixture-demo.yml --ref <브랜치> -f scenario=all`로 runner에서도 확인합니다.
+
+## 구성
+
+| 경로 | 내용 |
+|---|---|
+| `package.json`, `package-lock.json` | 기준 프로젝트(`ms@2.1.1`) |
+| `fixtures/known-list.json` | fixture 시연 전용 가상 목록 |
+| `fixtures/scenarios/` | 장면별 대상 lockfile |
+| `tools/fixture_gate.py` | fixture 게이트 |
+| `tests/` | 게이트 동작과 workflow 규칙 테스트 |
+| `.github/workflows/fixture-demo.yml` | 수동 실행으로 세 장면 재현 |
+| `.github/workflows/fixture-pr-check.yml` | PR의 lockfile 변경을 fixture 게이트로 평가 |
+| `.github/workflows/depbee.yml` | 제품 검사(공개 전에는 변수 확인만) |

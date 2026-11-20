@@ -1,0 +1,43 @@
+name: fixture PR 검사 (depbee 제품 미실행)
+
+# PR의 package-lock.json 변경을 fixture 게이트로 평가한다. depbee 제품은 실행하지 않는다.
+# 게이트 코드와 가상 목록은 기준 브랜치에서 받고, PR에서는 package-lock.json 하나만 데이터로 읽는다.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: PR lockfile fixture 판정 (보안 게이트 아님)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 기준 브랜치의 게이트 코드와 lockfile 받기
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+      - name: PR의 package-lock.json만 데이터로 받기
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: untrusted
+          persist-credentials: false
+          sparse-checkout: /package-lock.json
+          sparse-checkout-cone-mode: false
+      - name: fixture 게이트 실행 (기준 브랜치 코드, depbee 제품 아님)
+        run: >-
+          python3 -I trusted/tools/fixture_gate.py
+          --head untrusted/package-lock.json
+          --annotate-as package-lock.json
+          --report "$RUNNER_TEMP/fixture-report.json"
+      - name: fixture 보고서 올리기
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fixture-report
+          path: ${{ runner.temp }}/fixture-report.json
+          retention-days: 7
