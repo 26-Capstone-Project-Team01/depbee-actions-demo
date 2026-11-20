@@ -1,0 +1,26 @@
+name: depbee
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: 26-Capstone-Project-Team01/depbee@3d2b1866b991368fecf2f16bd3d65df4b7dff7cb
+        with:
+          max-changes: '1'
+          model-version: ${{ vars.DEPBEE_MODEL_VERSION }}
+          model-sha256: ${{ vars.DEPBEE_MODEL_SHA256 }}
+          manifest-sha256: ${{ vars.DEPBEE_MANIFEST_SHA256 }}
+          known-malicious-version: ${{ vars.DEPBEE_KNOWN_MALICIOUS_VERSION }}
+          known-malicious-sha256: ${{ vars.DEPBEE_KNOWN_MALICIOUS_SHA256 }}
