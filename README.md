@@ -46,16 +46,31 @@ gh workflow run fixture-demo.yml -f scenario=all
 4. 각 장면 job의 summary에서 패키지, 이전 버전, 새 버전, fixture 판정, 근거를 확인합니다.
 5. artifact `fixture-report-<장면>`의 `fixture-report.json`에서 `verdict`, `results[].status`, `depbee_executed: false`를 확인합니다.
 
+`known-match` job이 실패했다는 사실만으로는 기대한 실패가 아닙니다. 아래 세 가지가 모두 맞아야 기대한 실패입니다.
+
+- 게이트 단계가 종료 코드 1로 끝났습니다. 그 단계의 오류가 `Process completed with exit code 1.`입니다.
+- 제목이 `fixture 게이트 (depbee 제품 아님)`인 오류 주석이 `node_modules/DEPBEE-DEMO-SENTINEL` 줄을 가리키고, 내용에 `시연용 가상 목록과 일치(DEMO-FIXTURE-0001)`이 있습니다.
+- artifact `fixture-report-known-match`의 `fixture-report.json`에서 `verdict`가 `fail`이고 `results[0].status`가 `known_match`입니다.
+
+종료 코드가 2이거나, 제목이 `fixture 게이트 오류 (판정 아님)`인 주석이 있거나, 보고서가 올라오지 않았으면 게이트가 판정을 끝내지 못한 것입니다. 그 실패는 가상 목록 일치가 아닙니다.
+
 ### PR로 재현하기
 
-PR에서는 `fixture PR 검사 (depbee 제품 미실행)`이 실행됩니다. 장면 lockfile을 루트로 복사한 브랜치를 만들어 `main`으로 PR을 엽니다.
+PR에서는 `fixture PR 검사 (depbee 제품 미실행)`이 실행됩니다. 최신 원격 `main`에서 고유한 이름의 장면 브랜치를 만들고, 장면 lockfile을 루트로 복사해 `main`으로 PR을 엽니다.
+
+아래 명령은 브랜치 이름에 UTC 초 단위 시각을 붙여 열려 있는 장면 PR이 이미 쓰는 `scene/known-match`와 구분하고, 같은 이름의 브랜치가 이미 있거나 다른 단계가 실패하면 그 뒤 명령을 실행하지 않고 멈춥니다.
 
 ```sh
-git switch -c scene/known-match main
-cp fixtures/scenarios/known-match/package-lock.json package-lock.json
-git commit -am "known-match 장면을 재현한다"
-git push -u origin scene/known-match
-gh pr create --base main --title "known-match 장면" --body "fixture 시연용 PR입니다. 병합하지 않습니다."
+(
+  set -e
+  scene_branch="scene/known-match-$(date -u +%Y%m%dT%H%M%SZ)"
+  git fetch origin main
+  git switch -c "$scene_branch" FETCH_HEAD
+  cp fixtures/scenarios/known-match/package-lock.json package-lock.json
+  git commit -m "known-match 장면을 재현한다" -- package-lock.json
+  git push -u origin "$scene_branch"
+  gh pr create --base main --title "known-match 장면" --body "fixture 시연용 PR입니다. 병합하지 않습니다."
+)
 ```
 
 결과는 수동 실행과 같고, 주석은 `package-lock.json`의 해당 줄을 가리킵니다. fixture 게이트는 lockfile만 읽으므로 `package.json`은 바꾸지 않아도 됩니다. 장면 PR은 병합하지 않고 닫습니다. 병합하면 `main`의 기준 lockfile이 바뀌어 세 장면의 결과가 달라집니다.
@@ -68,7 +83,14 @@ fixture 게이트는 대상 lockfile의 `packages` 항목 중 기준에 없거�
 2. 이름이나 버전을 해석하지 못하거나 사전 배포 버전이면 `hold`입니다. 경고 주석을 남기고 job은 성공합니다. 보류는 통과가 아닙니다.
 3. 그 밖의 항목은 `no_match`입니다.
 
-평가하지 못하면 종료 코드 2로 실패하며 통과로 처리하지 않습니다. lockfile이 없거나, 심볼릭 링크이거나, 8 MiB를 넘거나, JSON 객체가 아니거나, `packages`가 없거나(lockfileVersion 1), 변경 항목이 20개를 넘는 경우입니다. 가상 목록을 읽지 못한 경우도 같습니다.
+판정을 끝내지 못하면 종료 코드 2로 실패합니다. 통과로도 가상 목록 일치로도 처리하지 않습니다. 이때 오류 주석의 제목은 `fixture 게이트 오류 (판정 아님)`이고 보고서는 올라가지 않습니다. 원인은 네 가지입니다.
+
+- 입력을 읽지 못했습니다. lockfile이 없거나, 심볼릭 링크이거나, 8 MiB를 넘거나, JSON 객체가 아니거나, `packages`가 없거나(lockfileVersion 1), 변경 항목이 20개를 넘는 경우입니다. 가상 목록을 읽지 못한 경우도 같습니다.
+- 결과를 기록하지 못했습니다. 보고서나 summary 파일을 쓸 수 없는 경우입니다.
+- 판정을 알리지 못했습니다. 판정 주석을 출력할 수 없거나 완료 신호를 쓸 수 없는 경우입니다.
+- 게이트 내부에서 예상하지 못한 오류가 났습니다.
+
+게이트는 보고서와 summary를 쓰고, 판정 주석을 출력한 다음, 마지막으로 step 출력 `report_ready=true`를 완료 신호로 씁니다. workflow는 이 신호가 있을 때만 보고서를 올립니다. 보고서와 summary를 쓰고 판정 주석까지 출력한 뒤 마지막 완료 신호 쓰기에 실패하면 종료 코드 2로 끝나고 보고서도 올라가지 않지만, 이미 출력된 판정 주석은 남을 수 있습니다. 그래서 가상 목록 일치는 종료 코드 1, 일치 주석, 올라온 보고서 세 가지를 함께 확인해야 합니다. 판정을 끝내지 못한 실행에서는 게이트가 보고서 파일을 지우며, 지우지 못한 파일이 남아도 신호가 없어 올라가지 않습니다.
 
 fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항목, 패키지 내용, 설치 스크립트, `package.json`을 보지 않습니다. 실제 저장소를 지키는 용도로 쓰지 않습니다.
 
@@ -82,13 +104,13 @@ fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항�
 
    | 저장소 변수 | 값 |
    |---|---|
-   | `DEPBEE_MODEL_VERSION` | 모델 Release 태그 |
+   | `DEPBEE_MODEL_VERSION` | 모델 Release 태그. 영문자나 숫자로 시작하고 영문자, 숫자, `.`, `_`, `-`만 쓰며 100자 이하 |
    | `DEPBEE_MODEL_SHA256` | `model.txt`의 SHA-256(소문자 16진수 64자) |
    | `DEPBEE_MANIFEST_SHA256` | 모델 `manifest.json`의 SHA-256 |
-   | `DEPBEE_KNOWN_MALICIOUS_VERSION` | 색인 Release 태그 |
+   | `DEPBEE_KNOWN_MALICIOUS_VERSION` | 색인 Release 태그. 형식은 모델 태그와 같음 |
    | `DEPBEE_KNOWN_MALICIOUS_SHA256` | `known-malicious-index.json`의 SHA-256 |
 
-4. **depbee scan (제품 연동)** workflow를 수동 실행해 `제품 연동 변수 확인 (검사 아님)` job이 성공하는지 봅니다. 이 job은 변수 다섯 개가 있고 형식이 맞는지만 확인합니다. 저장소 공개 여부와 Release 파일의 해시는 확인하지 않습니다.
+4. **depbee scan (제품 연동)** workflow를 수동 실행해 `제품 연동 변수 확인 (검사 아님)` job이 성공하는지 봅니다. 이 job은 변수 다섯 개의 형식만 확인합니다. 형식 규칙은 고정한 depbee Action의 입력 검사와 같습니다. 저장소 공개 여부와 Release 파일의 해시는 확인하지 않습니다.
 5. `.github/workflows/depbee.yml`에서 `pull_request` 두 줄의 주석을 풀어 PR로 올립니다.
 6. lockfile을 바꾸는 PR에서 `depbee scan (제품 실제 검사)` job이 실제로 실행됐는지 확인합니다.
 
@@ -103,10 +125,10 @@ fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항�
 
 | 위치 | 실패가 뜻하는 것 |
 |---|---|
-| fixture 시연의 `known-match` 장면 | 기대한 결과입니다. 가상 목록 일치를 실패로 처리했습니다. |
+| fixture 시연의 `known-match` 장면 | 종료 코드 1, 일치 주석, `verdict`가 `fail`인 보고서가 모두 있으면 기대한 결과입니다. 하나라도 없으면 게이트가 판정을 끝내지 못한 실패입니다. |
 | fixture 시연의 `pass`, `hold-warning` 장면 | 기대와 다릅니다. 게이트, 가상 목록, 장면 lockfile, 기준 lockfile 중 하나가 바뀌었습니다. |
 | fixture 시연의 자체 테스트 | 게이트나 workflow가 이 문서와 다르게 동작합니다. 시연 전에 고쳐야 합니다. |
-| fixture PR 검사 | PR의 lockfile에 가상 목록과 일치하는 항목이 있거나(종료 코드 1) lockfile을 평가하지 못했습니다(종료 코드 2). |
+| fixture PR 검사 | 종료 코드 1, 일치 주석, `verdict`가 `fail`인 보고서가 있으면 PR의 lockfile에 가상 목록과 일치하는 항목이 있습니다. 종료 코드 2이면 게이트가 판정을 끝내지 못했습니다. |
 | 제품 연동 변수 확인 | 제품 연동이 미구성입니다. depbee 검사는 실행되지 않았습니다. |
 | depbee scan (제품 실제 검사) | depbee가 기지 악성 일치를 찾았거나 검사를 끝내지 못했습니다. Action을 받지 못해 job 준비 단계에서 실패하면 제품 저장소가 공개됐는지 확인합니다. |
 
@@ -120,7 +142,7 @@ fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항�
 - fixture PR 검사가 실행하는 코드는 기준 브랜치에서 받은 `tools/fixture_gate.py`뿐이고 `python3 -I`로 실행합니다. PR에서는 `package-lock.json` 한 파일만 받아 데이터로 읽습니다. 게이트나 가상 목록을 고친 PR도 병합 전에는 기준 브랜치의 코드와 목록으로 평가됩니다.
 - `pull_request` 이벤트는 PR에 든 workflow 파일을 실행합니다. workflow를 고친 PR은 검사 자체를 바꿀 수 있으므로 `.github/workflows/` 변경은 CODEOWNERS와 브랜치 보호로 리뷰를 거치게 합니다.
 - lockfile에서 온 문자열은 신뢰하지 않습니다. 주석, summary, 보고서에 쓰기 전에 인쇄 가능한 ASCII가 아닌 문자를 `\uXXXX`로 바꾸고 120자로 자른 뒤 workflow 명령과 Markdown 규칙으로 이스케이프합니다.
-- artifact는 fixture 게이트가 runner 임시 폴더에 쓴 JSON 파일 하나이며 7일 뒤 지워집니다. 이 저장소의 workflow는 artifact를 내려받아 쓰지 않습니다.
+- artifact는 fixture 게이트가 runner 임시 폴더에 쓴 JSON 파일 하나이며 7일 뒤 지워집니다. 게이트가 완료 신호 `report_ready`를 낸 실행에서만 올립니다. 이 저장소의 workflow는 artifact를 내려받아 쓰지 않습니다.
 - 장면 lockfile은 시연 입력입니다. 이 파일들로 `npm install`이나 `npm ci`를 실행하지 않습니다.
 
 위 규칙 가운데 텍스트로 확인할 수 있는 것은 `tests/test_workflows.py`가 검사합니다.
