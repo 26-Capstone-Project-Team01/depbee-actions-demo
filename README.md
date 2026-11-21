@@ -56,13 +56,16 @@ gh workflow run fixture-demo.yml -f scenario=all
 
 ### PR로 재현하기
 
-PR에서는 `fixture PR 검사 (depbee 제품 미실행)`이 실행됩니다. 장면 lockfile을 루트로 복사한 브랜치를 만들어 `main`으로 PR을 엽니다.
+PR에서는 `fixture PR 검사 (depbee 제품 미실행)`이 실행됩니다. 최신 원격 `main`에서 고유한 이름의 장면 브랜치를 만들고, 장면 lockfile을 루트로 복사해 `main`으로 PR을 엽니다.
+
+아래 `<고유한-이름>`은 원격에 아직 없는 브랜치 이름으로 바꿉니다. 열려 있는 장면 PR이 이미 쓰는 `scene/known-match`와 겹치지 않게 `scene/known-match-<날짜>`처럼 구분되는 이름을 고르고, push에도 같은 이름을 씁니다.
 
 ```sh
-git switch -c scene/known-match main
+git fetch origin main
+git switch -c <고유한-이름> origin/main
 cp fixtures/scenarios/known-match/package-lock.json package-lock.json
 git commit -am "known-match 장면을 재현한다"
-git push -u origin scene/known-match
+git push -u origin <고유한-이름>
 gh pr create --base main --title "known-match 장면" --body "fixture 시연용 PR입니다. 병합하지 않습니다."
 ```
 
@@ -83,7 +86,7 @@ fixture 게이트는 대상 lockfile의 `packages` 항목 중 기준에 없거�
 - 판정을 알리지 못했습니다. 판정 주석을 출력할 수 없거나 완료 신호를 쓸 수 없는 경우입니다.
 - 게이트 내부에서 예상하지 못한 오류가 났습니다.
 
-게이트는 보고서와 summary를 쓰고, 판정 주석을 출력한 다음, 마지막으로 step 출력 `report_ready=true`를 완료 신호로 씁니다. workflow는 이 신호가 있을 때만 보고서를 올립니다. 그래서 일치 주석, 종료 코드 1, 올라온 보고서는 기록과 알림까지 끝난 판정에서만 나옵니다. 판정을 끝내지 못한 실행에서는 게이트가 보고서 파일을 지우며, 지우지 못한 파일이 남아도 신호가 없어 올라가지 않습니다.
+게이트는 보고서와 summary를 쓰고, 판정 주석을 출력한 다음, 마지막으로 step 출력 `report_ready=true`를 완료 신호로 씁니다. workflow는 이 신호가 있을 때만 보고서를 올립니다. 보고서와 summary를 쓰고 판정 주석까지 출력한 뒤 마지막 완료 신호 쓰기에 실패하면 종료 코드 2로 끝나고 보고서도 올라가지 않지만, 이미 출력된 판정 주석은 남을 수 있습니다. 그래서 가상 목록 일치는 종료 코드 1, 일치 주석, 올라온 보고서 세 가지를 함께 확인해야 합니다. 판정을 끝내지 못한 실행에서는 게이트가 보고서 파일을 지우며, 지우지 못한 파일이 남아도 신호가 없어 올라가지 않습니다.
 
 fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항목, 패키지 내용, 설치 스크립트, `package.json`을 보지 않습니다. 실제 저장소를 지키는 용도로 쓰지 않습니다.
 
