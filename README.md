@@ -58,15 +58,19 @@ gh workflow run fixture-demo.yml -f scenario=all
 
 PR에서는 `fixture PR 검사 (depbee 제품 미실행)`이 실행됩니다. 최신 원격 `main`에서 고유한 이름의 장면 브랜치를 만들고, 장면 lockfile을 루트로 복사해 `main`으로 PR을 엽니다.
 
-아래 `<고유한-이름>`은 원격에 아직 없는 브랜치 이름으로 바꿉니다. 열려 있는 장면 PR이 이미 쓰는 `scene/known-match`와 겹치지 않게 `scene/known-match-<날짜>`처럼 구분되는 이름을 고르고, push에도 같은 이름을 씁니다.
+아래 명령은 브랜치 이름에 UTC 초 단위 시각을 붙여 열려 있는 장면 PR이 이미 쓰는 `scene/known-match`와 구분하고, 같은 이름의 브랜치가 이미 있거나 다른 단계가 실패하면 그 뒤 명령을 실행하지 않고 멈춥니다.
 
 ```sh
-git fetch origin main
-git switch -c <고유한-이름> origin/main
-cp fixtures/scenarios/known-match/package-lock.json package-lock.json
-git commit -am "known-match 장면을 재현한다"
-git push -u origin <고유한-이름>
-gh pr create --base main --title "known-match 장면" --body "fixture 시연용 PR입니다. 병합하지 않습니다."
+(
+  set -e
+  scene_branch="scene/known-match-$(date -u +%Y%m%dT%H%M%SZ)"
+  git fetch origin main
+  git switch -c "$scene_branch" FETCH_HEAD
+  cp fixtures/scenarios/known-match/package-lock.json package-lock.json
+  git commit -m "known-match 장면을 재현한다" -- package-lock.json
+  git push -u origin "$scene_branch"
+  gh pr create --base main --title "known-match 장면" --body "fixture 시연용 PR입니다. 병합하지 않습니다."
+)
 ```
 
 결과는 수동 실행과 같고, 주석은 `package-lock.json`의 해당 줄을 가리킵니다. fixture 게이트는 lockfile만 읽으므로 `package.json`은 바꾸지 않아도 됩니다. 장면 PR은 병합하지 않고 닫습니다. 병합하면 `main`의 기준 lockfile이 바뀌어 세 장면의 결과가 달라집니다.
