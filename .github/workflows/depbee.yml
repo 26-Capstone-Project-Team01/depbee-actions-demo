@@ -1,7 +1,7 @@
 name: depbee scan (제품 연동)
 
 # depbee 제품의 실제 검사 경로다. fixture 시연(fixture-demo.yml, fixture-pr-check.yml)과 별개다.
-# 제품 저장소와 모델·색인 Release가 공개되기 전에는 PR 검사를 실행할 수 없어 pull_request 트리거를 꺼 두었다.
+# depbee와 depbee-analyzer 저장소가 공개되기 전에는 PR 검사를 실행할 수 없어 pull_request 트리거를 꺼 두었다.
 # 켜는 절차는 README의 "제품 연동 켜기"에 있다. 준비가 끝나면 아래 두 줄의 주석을 푼다.
 on:
   workflow_dispatch:
@@ -13,35 +13,38 @@ permissions:
 
 jobs:
   readiness:
-    name: 제품 연동 변수 확인 (검사 아님)
+    name: 제품 공개 여부 확인 (검사 아님)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 저장소 변수 다섯 개 확인
-        env:
-          DEPBEE_MODEL_VERSION: ${{ vars.DEPBEE_MODEL_VERSION }}
-          DEPBEE_MODEL_SHA256: ${{ vars.DEPBEE_MODEL_SHA256 }}
-          DEPBEE_MANIFEST_SHA256: ${{ vars.DEPBEE_MANIFEST_SHA256 }}
-          DEPBEE_KNOWN_MALICIOUS_VERSION: ${{ vars.DEPBEE_KNOWN_MALICIOUS_VERSION }}
-          DEPBEE_KNOWN_MALICIOUS_SHA256: ${{ vars.DEPBEE_KNOWN_MALICIOUS_SHA256 }}
-        # 형식은 고정한 depbee Action의 입력 검사와 같다. 여기서 통과한 값을 Action이 거부하지 않게 한다.
+      - name: 고정 커밋 두 개를 로그인 없이 볼 수 있는지 확인
+        # 대상은 scan job이 고정한 depbee 커밋과 그 커밋의 pyproject.toml이 고정한 depbee-analyzer 커밋의 주소 둘뿐이다.
+        # depbee SHA를 바꾸면 분석기 커밋도 함께 확인한다.
+        # 인증 없이 HEAD 요청을 보내 응답 코드만 읽는다. 리디렉션을 따라가지 않고 본문을 받지 않으며 받은 것을 실행하지 않는다.
         run: |
-          LC_ALL=C
-          tag='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
-          digest='^[0-9a-f]{64}$'
-          missing=()
-          for name in DEPBEE_MODEL_VERSION DEPBEE_KNOWN_MALICIOUS_VERSION; do
-            [[ "${!name}" =~ $tag ]] || missing+=("$name")
+          closed=
+          for url in \
+            https://github.com/26-Capstone-Project-Team01/depbee/commit/574891cde7544a8bbe67045185856ddca186a5a4 \
+            https://github.com/26-Capstone-Project-Team01/depbee-analyzer/commit/917ba903bb2e719419ad5f2daeb7d542940703d5
+          do
+            # curl이 실패하면 그 전에 받은 응답 코드도 믿지 않는다.
+            status=$(curl --disable --silent --show-error --head --output /dev/null \
+              --write-out '%{http_code}' --proto '=https' --max-time 30 "$url") || status=000
+            echo "HTTP $status $url"
+            repository=${url%/commit/*}
+            case $status in
+              200) continue ;;
+              404) reason="비공개이거나 없음" ;;
+              *) reason="접근 실패" ;;
+            esac
+            closed+="${closed:+, }${repository##*/}(HTTP $status, $reason)"
           done
-          for name in DEPBEE_MODEL_SHA256 DEPBEE_MANIFEST_SHA256 DEPBEE_KNOWN_MALICIOUS_SHA256; do
-            [[ "${!name}" =~ $digest ]] || missing+=("$name")
-          done
-          if (( ${#missing[@]} )); then
-            echo "::error title=제품 연동 미구성::depbee 제품 검사는 실행되지 않았습니다. 비어 있거나 형식이 틀린 저장소 변수: ${missing[*]}"
+          if [ -n "$closed" ]; then
+            echo "::error title=제품 검사 미실행::depbee 제품 검사는 실행되지 않았습니다. 공개가 확인되지 않은 고정 커밋: $closed"
             exit 1
           fi
-          echo "::notice title=제품 연동 변수 확인::저장소 변수 다섯 개의 형식이 맞습니다. 이 확인은 검사가 아닙니다. 실제 검사는 pull_request 트리거를 켠 뒤 PR에서 scan job이 실행합니다."
+          echo "::notice title=공개 여부만 확인 (제품 검사 미실행)::고정한 depbee 커밋과 depbee-analyzer 커밋을 로그인 없이 볼 수 있습니다. 이 확인은 검사가 아니며 depbee 제품 검사는 실행되지 않았습니다. 실제 검사는 pull_request 트리거를 켠 뒤 PR에서 scan job이 실행합니다."
 
   scan:
     name: depbee scan (제품 실제 검사)
@@ -53,11 +56,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: 26-Capstone-Project-Team01/depbee@612949a06652bcc04e9754480c39b1bb38af3b30
+      # 입력은 장면 정책 max-changes 하나다. 모델과 기지 악성 색인은 이 커밋의 depbee 설치본에 든 것을 쓴다.
+      - uses: 26-Capstone-Project-Team01/depbee@574891cde7544a8bbe67045185856ddca186a5a4
         with:
           max-changes: '1'
-          model-version: ${{ vars.DEPBEE_MODEL_VERSION }}
-          model-sha256: ${{ vars.DEPBEE_MODEL_SHA256 }}
-          manifest-sha256: ${{ vars.DEPBEE_MANIFEST_SHA256 }}
-          known-malicious-version: ${{ vars.DEPBEE_KNOWN_MALICIOUS_VERSION }}
-          known-malicious-sha256: ${{ vars.DEPBEE_KNOWN_MALICIOUS_SHA256 }}

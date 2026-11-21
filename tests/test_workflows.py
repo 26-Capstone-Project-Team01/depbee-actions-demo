@@ -13,14 +13,28 @@ PRODUCT = "depbee.yml"
 PRODUCT_ACTION = "26-Capstone-Project-Team01/depbee@"
 # README: this workflow may be deleted once the product check runs on pull requests.
 PULL_REQUEST_CHECK = "fixture-pr-check.yml"
-# Repository variables of the product check, here with values its input check accepts.
-VARIABLES = {
-    "DEPBEE_MODEL_VERSION": "model-v1.0",
-    "DEPBEE_MODEL_SHA256": "0" * 64,
-    "DEPBEE_MANIFEST_SHA256": "a" * 64,
-    "DEPBEE_KNOWN_MALICIOUS_VERSION": "known_2026.11",
-    "DEPBEE_KNOWN_MALICIOUS_SHA256": "f" * 64,
-}
+# The readiness probe asks for the depbee commit the scan pins and for this depbee-analyzer
+# commit, which that depbee commit installs (its pyproject.toml).
+COMMITS = "https://github.com/26-Capstone-Project-Team01/{}/commit/{}"
+ANALYZER = "917ba903bb2e719419ad5f2daeb7d542940703d5"
+# All it passes to curl before the address: no credential, no redirect followed, no body kept.
+PROBE = (
+    "--disable --silent --show-error --head --output /dev/null"
+    " --write-out %{http_code} --proto =https --max-time 30 "
+)
+# How its one annotation starts: both titles say that the product did not scan.
+PUBLIC = "::notice title=공개 여부만 확인 (제품 검사 미실행)::"
+NOT_SCANNED = (
+    "::error title=제품 검사 미실행::depbee 제품 검사는 실행되지 않았습니다."
+    " 공개가 확인되지 않은 고정 커밋: "
+)
+# Stands in for curl: records its arguments and answers "<HTTP status> [<exit status>]".
+FAKE_CURL = """#!/bin/sh
+printf '%s\\n' "$*" >> calls
+case "$*" in */depbee/commit/*) set -- $DEPBEE ;; *) set -- $ANALYZER ;; esac
+printf %s "$1"
+exit "${2:-0}"
+"""
 
 
 def code(text):
@@ -149,6 +163,27 @@ class WorkflowRules(unittest.TestCase):
                 self.assertRegex(text, upload)
                 self.assertEqual(text.count("uses: actions/upload-artifact@"), 1)
 
+    def test_product_scan_is_off_and_the_manual_run_only_probes(self):
+        text = WORKFLOWS[PRODUCT]
+        triggers = text.split("\non:\n")[1].split("\npermissions:")[0]
+        self.assertEqual(triggers.split(), ["workflow_dispatch:"])
+        # Each job belongs to one event, so the manual run cannot reach the Action.
+        readiness, scan = text.split("\n  scan:\n")
+        self.assertIn("    if: github.event_name == 'workflow_dispatch'\n", readiness)
+        self.assertIn("    if: github.event_name == 'pull_request'\n", scan)
+        self.assertNotIn("uses:", readiness)
+        # The scan is the checkout and the Action: no step of this repository runs npm or code.
+        self.assertEqual(scripts(scan), [])
+
+    def test_product_action_gets_the_scene_policy_and_nothing_to_configure(self):
+        text = WORKFLOWS[PRODUCT]
+        # No repository variable, and no expression that could pass a token or a Release value.
+        for absent in ("vars.", "${{"):
+            self.assertNotIn(absent, text)
+        # The Action is the last step and max-changes its only input.
+        step = text.split("- uses: " + PRODUCT_ACTION)[1]
+        self.assertRegex(step, r"^[0-9a-f]{40}\n +with:\n +max-changes: '1'\s*$")
+
     def test_readme_names_the_product_commit_the_workflow_pins(self):
         pinned = re.search(
             re.escape(PRODUCT_ACTION) + r"[0-9a-f]{40}\n", WORKFLOWS[PRODUCT]
@@ -163,54 +198,73 @@ class WorkflowRules(unittest.TestCase):
     "runs the step with bash, like the runner",
 )
 class ProductReadiness(unittest.TestCase):
-    """The readiness step refuses what the pinned depbee Action refuses in its input check.
+    """The manual run only asks whether the two pinned commits can be seen without signing in.
 
-    That check takes a Release tag that starts with a letter or digit and continues with up to 99
-    letters, digits, dots, underscores or hyphens, and a digest of 64 lowercase hex digits.
+    A fake curl answers, so these tests send no request.
     """
 
-    def check(self, **changed):
-        """(exit status, names the step reports) for the valid variables with these changes."""
+    def probe(self, depbee="200", analyzer="200"):
+        """(exit status, annotations, curl calls) when the fake curl gives these answers."""
         workflow = (ROOT / ".github" / "workflows" / PRODUCT).read_text("utf-8")
-        (script,) = [found for found in scripts(workflow) if "missing=()" in found]
+        (script,) = scripts(workflow)
         with tempfile.TemporaryDirectory() as temp:
-            step = Path(temp, "step.sh")
-            step.write_text(script, encoding="utf-8")
+            Path(temp, "step.sh").write_text(script, encoding="utf-8")
+            fake = Path(temp, "curl")
+            fake.write_text(FAKE_CURL, encoding="utf-8")
+            fake.chmod(0o755)
             done = subprocess.run(
-                ["bash", "-e", str(step)],
-                env={"PATH": os.environ["PATH"], **VARIABLES, **changed},
+                ["bash", "-e", "step.sh"],
+                cwd=temp,
+                env={
+                    "PATH": temp + os.pathsep + os.environ["PATH"],
+                    "DEPBEE": depbee,
+                    "ANALYZER": analyzer,
+                },
                 capture_output=True,
                 timeout=60,
                 check=False,
             )
-        output = done.stdout.decode("utf-8")
-        expected = (
-            "::error title=제품 연동 미구성::" if done.returncode else "::notice "
+            calls = Path(temp, "calls").read_text("utf-8").splitlines()
+        output = done.stdout.decode("utf-8").splitlines()
+        annotations = [line for line in output if line.startswith("::")]
+        return done.returncode, annotations, calls
+
+    def refused(self, named, **answers):
+        status, annotations, calls = self.probe(**answers)
+        self.assertEqual(status, 1)
+        self.assertEqual(annotations, [NOT_SCANNED + named])
+        # The second commit is asked for even when the first cannot be seen.
+        self.assertEqual(len(calls), 2)
+
+    def test_public_commits_are_reported_without_claiming_a_scan(self):
+        status, (notice,), calls = self.probe()
+        self.assertEqual(status, 0)
+        self.assertTrue(notice.startswith(PUBLIC), notice)
+        self.assertIn("depbee 제품 검사는 실행되지 않았습니다", notice)
+        pinned = re.search(
+            re.escape(PRODUCT_ACTION) + r"([0-9a-f]{40})\n", WORKFLOWS[PRODUCT]
         )
-        self.assertTrue(output.startswith(expected), output)
-        return done.returncode, sorted(re.findall(r"DEPBEE_[A-Z0-9_]+", output))
-
-    def test_well_formed_variables_are_accepted(self):
-        self.assertEqual(self.check(), (0, []))
-        self.assertEqual(self.check(DEPBEE_MODEL_VERSION="1" + "-" * 99), (0, []))
-
-    def test_nothing_registered_names_all_five(self):
         self.assertEqual(
-            self.check(**dict.fromkeys(VARIABLES, "")), (1, sorted(VARIABLES))
+            calls,
+            [
+                PROBE + COMMITS.format("depbee", pinned.group(1)),
+                PROBE + COMMITS.format("depbee-analyzer", ANALYZER),
+            ],
         )
 
-    def test_tags_the_action_refuses_are_refused(self):
-        refused = ("", "demo release", "-v1", ".v1", "release/v1", "v1 ", "v" * 101)
-        for name in ("DEPBEE_MODEL_VERSION", "DEPBEE_KNOWN_MALICIOUS_VERSION"):
-            for tag in (*refused, "버전1"):
-                with self.subTest(name=name, tag=tag):
-                    self.assertEqual(self.check(**{name: tag}), (1, [name]))
+    def test_private_commit_fails_and_says_nothing_was_scanned(self):
+        private = "(HTTP 404, 비공개이거나 없음)"
+        self.refused("depbee" + private, depbee="404")
+        self.refused("depbee-analyzer" + private, analyzer="404")
+        self.refused(
+            f"depbee{private}, depbee-analyzer{private}", depbee="404", analyzer="404"
+        )
 
-    def test_digests_the_action_refuses_are_refused(self):
-        for name in (key for key in VARIABLES if key.endswith("SHA256")):
-            for digest in ("", "0" * 63, "0" * 65, "A" * 64, "g" * 64):
-                with self.subTest(name=name, digest=digest):
-                    self.assertEqual(self.check(**{name: digest}), (1, [name]))
+    def test_unreachable_commit_fails_and_says_nothing_was_scanned(self):
+        # No response, a redirect (it is not followed), a status from a curl that then failed.
+        for answer, shown in {"000 7": "000", "301": "301", "200 28": "000"}.items():
+            with self.subTest(answer):
+                self.refused(f"depbee(HTTP {shown}, 접근 실패)", depbee=answer)
 
 
 if __name__ == "__main__":
