@@ -103,7 +103,7 @@ fixture 게이트는 `resolved`나 `integrity`만 바뀐 항목, 삭제된 항�
   with:
     fetch-depth: 0
     persist-credentials: false
-- uses: 26-Capstone-Project-Team01/depbee@834ab9d00bb3ed3032aa94d8fc9956a1e6467324
+- uses: 26-Capstone-Project-Team01/depbee@7681386fa29469588ca089e34e917c17dd042d91
   with:
     max-changes: '1'
 ```
