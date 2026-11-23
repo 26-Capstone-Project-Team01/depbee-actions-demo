@@ -25,7 +25,7 @@ jobs:
         run: |
           closed=
           for url in \
-            https://github.com/26-Capstone-Project-Team01/depbee/commit/7681386fa29469588ca089e34e917c17dd042d91 \
+            https://github.com/26-Capstone-Project-Team01/depbee/commit/759cc6880452b178566fe0d3294dadaf1a249d2c \
             https://github.com/26-Capstone-Project-Team01/depbee-analyzer/commit/917ba903bb2e719419ad5f2daeb7d542940703d5
           do
             # curl이 실패하면 그 전에 받은 응답 코드도 믿지 않는다.
@@ -57,6 +57,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # 입력은 장면 정책 max-changes 하나다. 모델과 기지 악성 색인은 이 커밋의 depbee 설치본에 든 것을 쓴다.
-      - uses: 26-Capstone-Project-Team01/depbee@7681386fa29469588ca089e34e917c17dd042d91
+      - uses: 26-Capstone-Project-Team01/depbee@759cc6880452b178566fe0d3294dadaf1a249d2c
         with:
           max-changes: '1'
