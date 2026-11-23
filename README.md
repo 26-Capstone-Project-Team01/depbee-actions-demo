@@ -4,7 +4,7 @@ npm 의존성 변경을 GitHub Actions에서 검사하는 흐름을 보여 주�
 
 ## 제품 검사와 fixture 시연
 
-이 저장소에는 서로 섞이지 않는 두 경로가 있습니다. 제품 검사는 공개 저장소 [depbee](https://github.com/26-Capstone-Project-Team01/depbee)의 Action을 PR에서 실제로 실행합니다. fixture 시연은 저장소에 넣어 둔 고정 입력(fixture)과 가상 목록으로 세 장면의 화면을 보여 줍니다. 실패 장면은 실제 악성 패키지 없이 제품 검사로 만들 수 없어 fixture 시연이 맡습니다.
+이 저장소에는 서로 섞이지 않는 두 경로가 있습니다. 제품 검사는 공개 저장소 [depbee](https://github.com/26-Capstone-Project-Team01/depbee)의 Action을 PR에서 실제로 실행합니다. fixture 시연은 저장소에 넣어 둔 고정 입력(fixture)과 가상 목록으로 세 장면의 화면을 보여 줍니다. 제품 검사는 lockfile 항목의 이름과 버전을 depbee에 든 기지 악성 색인과 대조해 일치하면 실패합니다. 시연용 가상 이름 `DEPBEE-DEMO-SENTINEL`은 그 색인에 없으므로 제품 검사에서는 일치가 나오지 않습니다. 그래서 실패 화면은 fixture 시연이 가상 목록으로 재현합니다.
 
 | 구분 | fixture 시연 | 제품 검사 |
 |---|---|---|
@@ -21,7 +21,7 @@ npm 의존성 변경을 GitHub Actions에서 검사하는 흐름을 보여 주�
 
 ## 제품 검사
 
-`main` 대상 PR마다 `depbee.yml`의 `depbee scan (제품 실제 검사)` job이 depbee Action을 실행합니다. Action은 PR의 기준 커밋과 PR의 `package-lock.json`을 비교해 바뀐 항목을 찾고, 그 버전의 tarball을 npm registry에서 받아 읽기만 합니다. lockfile을 바꾸지 않은 PR에서는 바뀐 의존성 0개로 통과합니다.
+`main` 대상 PR마다 `depbee.yml`의 `depbee scan (제품 실제 검사)` job이 depbee Action을 실행합니다. Action은 PR의 기준 커밋과 PR의 `package-lock.json`을 비교해 바뀐 항목을 찾고, 그 버전의 tarball을 npm registry에서 받아 읽기만 합니다. lockfile을 바꾸지 않은 PR에서는 바뀐 의존성 0개로 통과하며, [이 실행](https://github.com/26-Capstone-Project-Team01/depbee-actions-demo/actions/runs/45290763429)이 그 예입니다.
 
 job의 단계는 아래 둘뿐입니다. Release, 저장소 변수, secret은 필요 없고 workflow 권한은 `contents: read`입니다. 다른 저장소에서 쓸 때도 `pull_request` 이벤트로 실행하는 job에 이 두 단계를 넣습니다.
 
@@ -42,7 +42,7 @@ job의 단계는 아래 둘뿐입니다. Release, 저장소 변수, secret은 �
 - Action은 기준 커밋을 `pull_request` 이벤트에서 받습니다. 다른 이벤트에는 기준 커밋이 없어 Action이 입력 오류로 실패하므로 이 workflow에는 수동 실행이 없습니다. 수동 시연은 `fixture-demo.yml`로 합니다.
 - 저장소 변수와 secret을 쓰지 않으므로 fork나 Dependabot이 연 PR에서도 Action이 받는 입력은 같습니다.
 
-판정 규칙은 depbee의 [GitHub Action 문서](https://github.com/26-Capstone-Project-Team01/depbee/blob/main/docs/ci-cd.md)를 따릅니다. 기지 악성 일치는 실패입니다. ML 위험 점수 기준 이상과 보류는 경고입니다. 입력 오류, depbee 설치 실패, 설치본에 든 모델·색인의 해시 불일치, 모델 ID나 색인 기준 시점이 없는 보고서는 실패입니다. 장면마다 lockfile 항목 하나만 바뀌므로 `max-changes`를 1로 두었습니다. 항목을 둘 이상 바꾼 PR은 검사 없이 실패합니다.
+판정 규칙은 고정한 커밋의 depbee [GitHub Action 문서](https://github.com/26-Capstone-Project-Team01/depbee/blob/759cc6880452b178566fe0d3294dadaf1a249d2c/docs/ci-cd.md)를 따릅니다. 기지 악성 일치는 실패입니다. ML 위험 점수 기준 이상과 보류는 경고입니다. 입력 오류, depbee 설치 실패, 설치본에 든 모델·색인의 해시 불일치, 모델 ID나 색인 기준 시점이 없는 보고서는 실패입니다. 장면마다 lockfile 항목 하나만 바뀌므로 `max-changes`를 1로 두었습니다. 항목을 둘 이상 바꾼 PR은 검사 없이 실패합니다.
 
 ### 정상 변경 PR로 확인하기
 
@@ -71,6 +71,8 @@ PR의 Checks에서 `depbee scan (제품 실제 검사)` job을 열어 아래를 
 3. 같은 행의 비교 버전은 `2.1.2`입니다. depbee는 lockfile의 이전 버전 `2.1.1`이 아니라 같은 release line의 직전 stable 버전과 비교합니다.
 4. summary의 `depbee Actions 판정` 절에 모델 ID `D04-E00`과 기지 악성 색인 기준 시점 `2026-10-06T14:00:47Z`가 있습니다.
 
+[PR #8](https://github.com/26-Capstone-Project-Team01/depbee-actions-demo/pull/8)은 같은 `ms` 변경을 담은 시연 전용 PR입니다. 그 [제품 검사 실행](https://github.com/26-Capstone-Project-Team01/depbee-actions-demo/actions/runs/45290776914)은 주석 없이 성공했고, artifact `depbee-report`의 값이 위 확인 항목과 같습니다. artifact는 보존 기간이 지나면 지워집니다.
+
 `scene`을 `hold-warning`이나 `known-match`로 바꾸면 그 장면의 PR이 열립니다. 같은 PR에서 두 검사는 아래처럼 끝납니다.
 
 | `scene` | 제품 검사 | fixture PR 검사 |
@@ -79,7 +81,7 @@ PR의 Checks에서 `depbee scan (제품 실제 검사)` job을 열어 아래를 
 | `hold-warning` | 성공, 경고 1개. 사전 배포 버전은 보류(`out_of_training_scope`)입니다. | 성공, 경고 1개 |
 | `known-match` | 성공, 경고 1개. npm registry 주소가 없는 항목은 보류(`unsupported_registry_source`)입니다. | 실패, 오류 1개 |
 
-보류는 검사를 끝내지 못한 항목이며 통과가 아닙니다. `known-match` 장면의 실패는 fixture PR 검사에만 나옵니다. 제품 검사는 npm registry 주소가 없는 `DEPBEE-DEMO-SENTINEL` 항목을 분석하지 않고 기지 악성 색인과도 대조하지 않습니다.
+보류는 검사를 끝내지 못한 항목이며 통과가 아닙니다. `known-match` 장면의 실패는 fixture PR 검사에만 나옵니다. 제품 검사는 npm registry 주소가 있는 항목만 기지 악성 색인과 대조합니다. 주소가 없는 `DEPBEE-DEMO-SENTINEL` 항목은 분석하지 않고 보류로 둡니다.
 
 장면 PR은 병합하지 않고 닫습니다. 병합하면 `main`의 기준 lockfile이 바뀌어 세 장면의 결과가 달라집니다.
 
