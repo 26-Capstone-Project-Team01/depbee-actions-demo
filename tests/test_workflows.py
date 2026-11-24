@@ -165,6 +165,14 @@ class WorkflowRules(unittest.TestCase):
         self.assertIsNotNone(pinned)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(pinned.group().strip(), readme)
+        # The decision rules README points to are the documentation of that same commit.
+        sha = pinned.group().strip().split("@")[1]
+        self.assertIn(
+            f"https://github.com/26-Capstone-Project-Team01/depbee/blob/{sha}/docs/ci-cd.md",
+            readme,
+        )
+        # A new pin must revisit README's claim of what it shares with the commit PR #8 ran.
+        self.assertIn(f"지금 고정한 `{sha[:7]}`", readme)
 
 
 if __name__ == "__main__":
