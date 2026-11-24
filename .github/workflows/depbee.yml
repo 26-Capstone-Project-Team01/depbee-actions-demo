@@ -20,6 +20,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # 입력은 장면 정책 max-changes 하나다. 모델과 기지 악성 색인은 이 커밋의 depbee 설치본에 든 것을 쓴다.
-      - uses: 26-Capstone-Project-Team01/depbee@759cc6880452b178566fe0d3294dadaf1a249d2c
+      - uses: 26-Capstone-Project-Team01/depbee@0a68fed3701743d6e68b0c61a3ca208e7dc3f646
         with:
           max-changes: '1'
